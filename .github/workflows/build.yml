@@ -1,0 +1,79 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        run: |
+          ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          # Install required SDK packages
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;28.0.12916984" \
+            "cmake;3.22.1"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --registry=https://registry.npmmirror.com
+
+      - name: Make Gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          # debug APK now embeds assets/index.android.bundle from src/main/assets,
+          # so it runs standalone (falls back to assets bundle when Metro is absent)
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Build Release APK
+        run: |
+          cd android
+          # Release build bundles JS automatically; sign with the project's debug keystore
+          # (MYAPP_RELEASE_* properties are read conditionally in app/build.gradle)
+          ./gradlew assembleRelease --no-daemon \
+            -PMYAPP_RELEASE_STORE_FILE=debug.keystore \
+            -PMYAPP_RELEASE_STORE_PASSWORD=android \
+            -PMYAPP_RELEASE_KEY_ALIAS=androiddebugkey \
+            -PMYAPP_RELEASE_KEY_PASSWORD=android
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload Release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30

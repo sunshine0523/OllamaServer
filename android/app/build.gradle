@@ -28,9 +28,10 @@ react {
     // codegenDir = file("../../node_modules/@react-native/codegen")
 
     /* Variants */
-    //   The list of variants to that are debuggable. For those we're going to
-    //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
-    //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
+    // The list of variants to that are debuggable. For those we're going to
+    // skip the bundling of the JS bundle and the assets. By default is just 'debug'.
+    // We set it to empty so the debug APK also bundles JS (runs standalone without Metro).
+    debuggableVariants = []
     // debuggableVariants = ["liteDebug", "prodDebug"]
 
     /* Bundling */
@@ -207,3 +208,6 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
+
+// Copy react-native-vector-icons fonts into APK assets (fixes missing icons in debug builds)
+apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")
