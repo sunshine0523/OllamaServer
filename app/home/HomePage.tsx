@@ -9,8 +9,12 @@ import {
     KeyboardAvoidingView,
     Platform,
     StyleSheet, ToastAndroid, ListRenderItem, ActivityIndicator,
+    GestureResponderEvent,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import MessageActionMenu from "../components/MessageActionMenu.tsx";
+import SelectTextModal from "../components/SelectTextModal.tsx";
+import ChatSettingsModal from "../components/ChatSettingsModal.tsx";
 import {NavigationProp, ParamListBase, useNavigation} from '@react-navigation/native';
 import ModelSelector from "../components/ModelSelector.tsx";
 import {chat, loadModel} from "../api/OllamaApi.ts";
@@ -18,7 +22,7 @@ import Markdown, {MarkdownIt} from "react-native-markdown-display";
 import {DrawerNavigationProp} from "@react-navigation/drawer";
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import {loadConversation, saveConversation} from "../utils/Storage.ts";
+import {loadConversation, saveConversation, loadChatSettings, saveChatSettings, ChatSettings, DEFAULT_CHAT_SETTINGS} from "../utils/Storage.ts";
 import {getSummary} from "../utils/ChatUtils.ts";
 import {useAppTheme} from "../theme/ThemeContext.tsx";
 import {useSafeAreaInsets} from "react-native-safe-area-context";
@@ -36,6 +40,14 @@ const HomePage = ({ route }) => {
     const insets = useSafeAreaInsets();
     // 加载模型
     const [loadingModalVisible, setLoadingModalVisible] = useState(false)
+    // 长按消息操作菜单（记录长按位置与消息内容）
+    const [menuState, setMenuState] = useState<{visible: boolean; x: number; y: number; content: string}>({visible: false, x: 0, y: 0, content: ''});
+    // 选择文本复制弹窗
+    const [selectModalVisible, setSelectModalVisible] = useState(false);
+    const [selectText, setSelectText] = useState('');
+    // 对话设置弹窗
+    const [settingsVisible, setSettingsVisible] = useState(false);
+    const [chatSettings, setChatSettings] = useState<ChatSettings>({...DEFAULT_CHAT_SETTINGS});
     // 输入消息
     const [message, setMessage] = useState('');
     // 保持用 ref 存储实时数据，state 仅用于触发渲染
@@ -147,7 +159,22 @@ const HomePage = ({ route }) => {
             setMessage('')
             flatListRef.current?.scrollToEnd({ animated: true })
 
-            chatSessionRef.current = chat(selectedModel, messagesRef.current, chatResponse => {
+            // 按上下文长度截断历史消息（粗略估算：1 token ≈ 2 字符）
+            let historyForRequest = messagesRef.current;
+            if (chatSettings.numCtx > 0) {
+                const budget = chatSettings.numCtx * 2;
+                let total = 0;
+                const trimmed: Message[] = [];
+                for (let i = messagesRef.current.length - 1; i >= 0; i--) {
+                    const len = messagesRef.current[i].content.length;
+                    if (total + len > budget && trimmed.length > 0) break;
+                    total += len;
+                    trimmed.unshift(messagesRef.current[i]);
+                }
+                historyForRequest = trimmed;
+            }
+
+            chatSessionRef.current = chat(selectedModel, historyForRequest, chatResponse => {
                 if (chatResponse.error) {
                     return
                 }
@@ -164,6 +191,10 @@ const HomePage = ({ route }) => {
                         forceUpdate({})
                     }
                 }
+            }, {
+                temperature: chatSettings.temperature,
+                top_p: chatSettings.topP,
+                num_ctx: chatSettings.numCtx,
             })
             chatSessionRef.current.promise.catch(e => {
                 ToastAndroid.show(`Chat error`, ToastAndroid.SHORT)
@@ -199,49 +230,73 @@ const HomePage = ({ route }) => {
             })
     };
 
+    // 加载对话设置
+    useEffect(() => {
+        loadChatSettings()
+            .then((s) => setChatSettings(s))
+            .catch((e) => log.error(`Load chat settings error: ${e}`));
+    }, []);
+
+    // 对话设置变更：更新状态并持久化
+    const handleSettingsChange = (s: ChatSettings) => {
+        setChatSettings(s);
+        saveChatSettings(s).catch((e) => log.error(`Save chat settings error: ${e}`));
+    };
+
+    // 长按消息：在长按位置弹出自定义操作菜单（复制/分享）
+    const handleMessageLongPress = (item: Message, event: GestureResponderEvent) => {
+        const {pageX, pageY} = event.nativeEvent;
+        setMenuState({visible: true, x: pageX, y: pageY, content: item.content});
+    };
+
     const renderMessage: ListRenderItem<Message> = ({ item }) => {
-        return <View style={[
-            styles.messageRow,
-            item.role === 'assistant' ? styles.botMessageRow : styles.userMessageRow
-        ]}>
-            {item.role === 'assistant' && (
-                <View style={styles.avatarContainer}>
-                    <View style={[
-                        styles.avatar,
-                        item.role === 'assistant' ? styles.botAvatar : styles.userAvatar
-                    ]}>
-                        <Text style={styles.avatarText}>
-                            {item.role === 'assistant' ? 'AI' : 'U'}
-                        </Text>
-                    </View>
-                </View>
-            )}
-            <View
+        return (
+            <TouchableOpacity
+                activeOpacity={0.8}
+                onLongPress={(e) => handleMessageLongPress(item, e)}
                 style={[
-                    styles.messageContainer,
-                    item.role === 'assistant' ? styles.botMessage : styles.userMessage,
+                    styles.messageRow,
+                    item.role === 'assistant' ? styles.botMessageRow : styles.userMessageRow
                 ]}>
-                <Markdown
-                    style={item.role === 'assistant' ? assistantMarkdownStyles : userMarkdownStyles}
-                    markdownit={rules}
-                    rules={renderRules}
-                >
-                    {item.content}
-                </Markdown>
-            </View>
-            {item.role !== 'assistant' && (
-                <View style={styles.avatarContainer}>
-                    <View style={[
-                        styles.avatar,
-                        item.role === 'assistant' ? styles.botAvatar : styles.userAvatar
-                    ]}>
-                        <Text style={styles.avatarText}>
-                            {item.role === 'assistant' ? 'AI' : 'U'}
-                        </Text>
+                {item.role === 'assistant' && (
+                    <View style={styles.avatarContainer}>
+                        <View style={[
+                            styles.avatar,
+                            item.role === 'assistant' ? styles.botAvatar : styles.userAvatar
+                        ]}>
+                            <Text style={styles.avatarText}>
+                                {item.role === 'assistant' ? 'AI' : 'U'}
+                            </Text>
+                        </View>
                     </View>
+                )}
+                <View
+                    style={[
+                        styles.messageContainer,
+                        item.role === 'assistant' ? styles.botMessage : styles.userMessage,
+                    ]}>
+                    <Markdown
+                        style={item.role === 'assistant' ? assistantMarkdownStyles : userMarkdownStyles}
+                        markdownit={rules}
+                        rules={renderRules}
+                    >
+                        {item.content}
+                    </Markdown>
                 </View>
-            )}
-        </View>
+                {item.role !== 'assistant' && (
+                    <View style={styles.avatarContainer}>
+                        <View style={[
+                            styles.avatar,
+                            item.role === 'assistant' ? styles.botAvatar : styles.userAvatar
+                        ]}>
+                            <Text style={styles.avatarText}>
+                                {item.role === 'assistant' ? 'AI' : 'U'}
+                            </Text>
+                        </View>
+                    </View>
+                )}
+            </TouchableOpacity>
+        );
     };
 
     const assistantMarkdownStyles = {
@@ -342,6 +397,10 @@ const HomePage = ({ route }) => {
         newButton: {
             position: 'absolute',
             right: 16,
+        },
+        settingsButton: {
+            position: 'absolute',
+            right: 56,
         },
         menuButton: {
             position: 'absolute',
@@ -465,9 +524,14 @@ const HomePage = ({ route }) => {
                         onModelSelect={handleModelSelect}
                     />
                     <TouchableOpacity
+                        style={styles.settingsButton}
+                        onPress={() => setSettingsVisible(true)}>
+                        <Icon name="settings" size={24} color={theme.colors.onSurface}/>
+                    </TouchableOpacity>
+                    <TouchableOpacity
                         style={styles.newButton}
                         onPress={handleNewPress}>
-                        <Icon name="add-comment" size={24} color={theme.colors.onSurface} />
+                        <Icon name="add-comment" size={24} color={theme.colors.onSurface}/>
                     </TouchableOpacity>
                 </View>
 
@@ -525,6 +589,32 @@ const HomePage = ({ route }) => {
                         </Dialog.Content>
                     </Dialog>
                 </Portal>
+
+                {/* 长按消息操作菜单（复制/分享，跟随长按位置） */}
+                <MessageActionMenu
+                    visible={menuState.visible}
+                    x={menuState.x}
+                    y={menuState.y}
+                    content={menuState.content}
+                    onClose={() => setMenuState((s) => ({...s, visible: false}))}
+                    onSelectText={(text) => {
+                        setSelectText(text);
+                        setSelectModalVisible(true);
+                    }}
+                />
+                {/* 选择文本复制弹窗 */}
+                <SelectTextModal
+                    visible={selectModalVisible}
+                    text={selectText}
+                    onClose={() => setSelectModalVisible(false)}
+                />
+                {/* 对话设置弹窗 */}
+                <ChatSettingsModal
+                    visible={settingsVisible}
+                    settings={chatSettings}
+                    onChange={handleSettingsChange}
+                    onClose={() => setSettingsVisible(false)}
+                />
             </SafeAreaView>
         </View>
     );

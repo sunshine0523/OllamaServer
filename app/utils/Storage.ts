@@ -3,6 +3,41 @@ import {Conversation, ConversationSummary} from "../model/Conversation.ts";
 
 const CONVERSATIONS_MESSAGES_KEY_PREFIX = '@conversation_messages_';
 const CONVERSATIONS_SUMMARIES_KEY = '@conversation_summaries';
+const CHAT_SETTINGS_KEY = '@chat_settings';
+
+/** 对话设置 */
+export interface ChatSettings {
+    temperature: number; // 0 ~ 2
+    topP: number;        // 0 ~ 1
+    numCtx: number;      // 0 = 使用模型默认上下文
+}
+
+const DEFAULT_CHAT_SETTINGS: ChatSettings = {
+    temperature: 0.8,
+    topP: 0.9,
+    numCtx: 0,
+};
+
+const saveChatSettings = async (settings: ChatSettings) => {
+    await AsyncStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify(settings));
+};
+
+const loadChatSettings = async (): Promise<ChatSettings> => {
+    const json = await AsyncStorage.getItem(CHAT_SETTINGS_KEY);
+    if (json != null) {
+        try {
+            const parsed = JSON.parse(json);
+            return {
+                temperature: typeof parsed.temperature === 'number' ? parsed.temperature : DEFAULT_CHAT_SETTINGS.temperature,
+                topP: typeof parsed.topP === 'number' ? parsed.topP : DEFAULT_CHAT_SETTINGS.topP,
+                numCtx: typeof parsed.numCtx === 'number' ? parsed.numCtx : DEFAULT_CHAT_SETTINGS.numCtx,
+            };
+        } catch (e) {
+            // 解析失败使用默认值
+        }
+    }
+    return {...DEFAULT_CHAT_SETTINGS};
+};
 
 type EventHandler = () => void;
 const eventMap = new Map<string, EventHandler[]>();
@@ -90,5 +125,5 @@ const getAllSummaries = async () => {
     return [];
 };
 
-export {saveConversation, deleteConversation, loadConversation, getAllSummaries, subscribe, unsubscribe, StorageEvent};
+export {saveConversation, deleteConversation, loadConversation, getAllSummaries, subscribe, unsubscribe, StorageEvent, saveChatSettings, loadChatSettings, DEFAULT_CHAT_SETTINGS};
 

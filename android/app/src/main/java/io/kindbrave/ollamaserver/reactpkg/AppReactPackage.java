@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import io.kindbrave.ollamaserver.module.ClipboardModule;
 import io.kindbrave.ollamaserver.module.FileUploadModule;
 import io.kindbrave.ollamaserver.module.HashModule;
 import io.kindbrave.ollamaserver.module.LogSaveModule;
@@ -28,6 +29,7 @@ public class AppReactPackage implements ReactPackage {
         modules.add(new FileUploadModule(reactContext));
         modules.add(new HashModule(reactContext));
         modules.add(new LogSaveModule(reactContext));
+        modules.add(new ClipboardModule(reactContext));
         return modules;
     }
 
