@@ -49,6 +49,7 @@ class OllamaExecutor(private val context: Context) {
             // 检查版本是否匹配且文件存在
             savedVersion == currentVersion
                     && File(getBinaryDir(), BINARY_NAME).exists()
+                    && File(getBinaryDir(), "lib").exists()
         } catch (e: Exception) {
             false
         }
@@ -102,12 +103,46 @@ class OllamaExecutor(private val context: Context) {
                 }
             }
 
+            // 复制依赖库目录（lib/ 与 lib/ollama/）
+            val abi = when (Build.SUPPORTED_ABIS.firstOrNull()) {
+                "arm64-v8a" -> "arm64-v8a"
+                "armeabi-v7a" -> "armeabi-v7a"
+                else -> throw IOException("Unsupported ABI")
+            }
+            copyAssetDirRecursive("$abi/lib", File(getBinaryDir(), "lib"))
+
+            // assets 复制不保留可执行位，需手动设置（否则 llama-server spawn 报 permission denied）
+            File(getBinaryDir(), "lib/ollama/llama-server").setExecutable(true)
+            File(getBinaryDir(), "lib/ollama/llama-quantize").setExecutable(true)
+
             // 设置可执行权限（重试机制）
             if (!targetFile.setExecutable(true)) {
                 throw IOException("Failed to set executable permission")
             }
             // 更新版本号
             prefs.edit { putString(PREF_BINARY_VERSION, currentVersion) }
+        }
+    }
+
+    /** 递归复制 assets 中的目录（用于 ollama 依赖库 lib/ 与 lib/ollama/） */
+    private fun copyAssetDirRecursive(assetDir: String, targetDir: File) {
+        targetDir.mkdirs()
+        context.assets.list(assetDir)?.forEach { name ->
+            val childPath = "$assetDir/$name"
+            val childTarget = File(targetDir, name)
+            if (childTarget.exists()) {
+                childTarget.delete()
+            }
+            try {
+                context.assets.open(childPath).use { input ->
+                    childTarget.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: IOException) {
+                // 是子目录，递归复制
+                copyAssetDirRecursive(childPath, childTarget)
+            }
         }
     }
 
@@ -150,7 +185,10 @@ class OllamaExecutor(private val context: Context) {
             LogUtils.getInstance(context).clearLogFile()
 
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
-            val binaryPath = File("${getBinaryDir()}/$BINARY_NAME").absolutePath
+            val binaryDir = getBinaryDir()
+            val binaryPath = File("${binaryDir}/$BINARY_NAME").absolutePath
+            val libDir = File(binaryDir, "lib").absolutePath
+            val libOllamaDir = File(File(binaryDir, "lib"), "ollama").absolutePath
             val homeDir = getHomeDir().absolutePath
 
             val processBuilder = ProcessBuilder(binaryPath, "serve")
@@ -158,7 +196,11 @@ class OllamaExecutor(private val context: Context) {
                 .redirectErrorStream(true) // 合并 stderr 到 stdout
 
             val env = processBuilder.environment()
-            env["LD_LIBRARY_PATH"] = "$nativeLibDir:${env["LD_LIBRARY_PATH"] ?: ""}"
+            env["LD_LIBRARY_PATH"] = "$libDir:$libOllamaDir:$nativeLibDir:${env["LD_LIBRARY_PATH"] ?: ""}"
+            env["OLLAMA_LIBRARY_PATH"] = libOllamaDir // 新版 ollama 依赖库与 llama-server 所在目录
+            // Android app 没有 /tmp，必须显式指定临时目录（新版 llama.cpp 引擎重度依赖）
+            val tmpDir = File(context.filesDir, "tmp").apply { mkdirs() }
+            env["OLLAMA_TMPDIR"] = tmpDir.absolutePath
             env["HOME"] = homeDir
             env["OLLAMA_DEBUG"] = "1"
             if (lanListening) env["OLLAMA_HOST"] = "0.0.0.0"
